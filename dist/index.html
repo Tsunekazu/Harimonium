@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#302632">
+  <meta name="description" content="Hari-Hari, with one sustained tone and a little time.">
+  <title>Hari</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon-192.png">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.mjs"></script>
+</head>
+<body>
+  <main class="instrument">
+    <div class="stop-strip"><button id="stop" class="quiet" type="button">Stop sound</button></div>
+
+    <section id="practice-stage" class="practice-stage" aria-labelledby="hari-title">
+      <h1 id="hari-title">Hari</h1>
+      <p class="invitation">Hari-Hari</p>
+      <div class="timer-face">
+        <output id="countdown" role="timer" aria-label="Time remaining" aria-live="off">10:00</output>
+        <p id="timer-state" class="hint">When you’re ready</p>
+      </div>
+      <div class="presets" role="group" aria-label="Practice duration">
+        <button class="preset" data-minutes="10" aria-pressed="true" type="button">10 min</button>
+        <button class="preset" data-minutes="15" aria-pressed="false" type="button">15 min</button>
+      </div>
+      <div class="timer-actions">
+        <button id="timer-start" class="primary" type="button">Begin 10 minutes</button>
+        <button id="timer-reset" class="quiet" type="button">Reset</button>
+      </div>
+      <button id="session-return" class="resume" type="button" hidden>Resume sound</button>
+      <p id="timer-announcement" class="sr-only" role="status" aria-live="polite"></p>
+      <small id="wake-status" class="hint">Keep Hari open while practising.</small>
+    </section>
+
+    <section class="sound-controls" aria-label="Practice sound">
+      <div class="sound-choices" role="group" aria-label="Sound">
+        <button class="sound-choice" data-sound="sa" aria-pressed="true" type="button">One tone</button>
+        <button class="sound-choice" data-sound="tanpura" aria-pressed="false" type="button">Tanpura</button>
+        <button class="sound-choice" data-sound="silent" aria-pressed="false" type="button">Silence</button>
+      </div>
+      <div class="pitch-controls" role="group" aria-label="Pitch of Sa">
+        <button id="pitch-down" type="button">Lower pitch</button>
+        <output id="pitch-value" aria-label="Pitch of Sa">C3</output>
+        <button id="pitch-up" type="button">Higher pitch</button>
+      </div>
+      <button id="preview" class="quiet preview" type="button">Hear tone</button>
+      <div class="range-control volume-control">
+        <label for="volume">Volume</label><output id="volume-value" for="volume">48%</output>
+        <input id="volume" type="range" min="0" max="100" value="48">
+      </div>
+      <p id="sound-status" class="status" role="status">Begin when you’re ready, or hear the tone first.</p>
+    </section>
+
+    <section class="daily" aria-labelledby="today-title">
+      <div class="today-heading"><h2 id="today-title">Today</h2><time id="today-date"></time></div>
+      <div class="daily-marks" role="group" aria-label="Mark your practice">
+        <button id="morning" type="button" aria-pressed="false"><span class="check" aria-hidden="true"></span><span>Morning</span></button>
+        <button id="evening" type="button" aria-pressed="false"><span class="check" aria-hidden="true"></span><span>Evening</span></button>
+      </div>
+      <p class="hint">Mark after practice. Tap again to undo.</p>
+      <details class="history"><summary>Recent days</summary><div id="recent-days"></div></details>
+      <small id="storage-status" class="hint" role="status">Your marks stay in this browser.</small>
+    </section>
+
+    <details id="sound-details" class="sound-settings">
+      <summary>More sound controls</summary>
+      <div class="fine-controls">
+        <div class="range-control"><label for="cents">Fine tuning</label><output id="cents-value" for="cents">0 cents</output><input id="cents" type="range" min="-50" max="50" value="0"></div>
+        <div class="range-control"><label for="drone-volume">Tone and drone volume</label><output id="drone-volume-value" for="drone-volume">60%</output><input id="drone-volume" type="range" min="0" max="100" value="60"></div>
+      </div>
+    </details>
+
+    <details id="keyboard-panel" class="keyboard-panel">
+      <summary>Play harmonium</summary>
+      <div class="keyboard-heading"><p class="hint">A few notes, at your own pace.</p><button id="enable-keys" type="button">Enable keys</button></div>
+      <div id="keys" class="keys" role="group" aria-label="Playable notes"></div>
+      <button id="hold" class="toggle" type="button" aria-pressed="false"><span class="indicator" aria-hidden="true"></span>Hold notes</button>
+      <p id="hold-hint" class="hint">Hold a key to play. You can play several together.</p>
+      <p class="hint keyboard-shortcuts">Keyboard: A S D F G H J K</p>
+    </details>
+
+    <footer>
+      <a href="./credits.html">About Hari &amp; the sounds</a>
+      <a href="./credits.html#install-hari">Install help</a>
+      <small id="offline-status" role="status">Checking offline availability…</small>
+      <button id="install" class="quiet" type="button" hidden>Install Hari</button>
+      <button id="update" class="quiet" type="button" hidden>Update Hari</button>
+    </footer>
+    <noscript>Hari needs JavaScript to play sound and run its timer.</noscript>
+  </main>
+</body>
+</html>

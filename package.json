@@ -1,0 +1,15 @@
+{
+  "name": "hari-app",
+  "version": "1.0.0",
+  "description": "Dependency-free HARI PWA; DOM tools are development checks only",
+  "private": true,
+  "scripts": {
+    "test": "node --experimental-vm-modules --test tests/*.test.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "type": "module",
+  "devDependencies": {
+    "linkedom": "^0.18.15"
+  }
+}
