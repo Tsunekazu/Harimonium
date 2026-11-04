@@ -49,6 +49,16 @@ screen staying awake. Offline use needs one complete online cache first.
 
 ## Publication state
 
-This file records the local prepared build. A public address or completed
-Android installation must be verified separately; neither follows from the
-automated checks above.
+Published with explicit user approval at
+[tsunekazu.github.io/Harimonium](https://tsunekazu.github.io/Harimonium/).
+The public source repository is
+[Tsunekazu/Harimonium](https://github.com/Tsunekazu/Harimonium).
+
+GitHub reports the Pages build complete for deployment commit
+`30de02b6ab43b5be5458d29e507343f7a98cd44b`, derived from app source commit
+`bbf879d`. HTTPS is enforced. All 26 public app/asset URLs returned HTTP 200;
+their bytes matched the local build, including all twelve audio recordings.
+JavaScript modules were served with the correct MIME type.
+
+The browser access host remains unavailable. Live HTTP verification confirms
+publication and asset integrity, not browser execution or Android installation.

@@ -4,6 +4,8 @@ A small instrument for repeating Hari-Hari: one sustained harmonium tone,
 tanpura, or silence, with a 10 or 15 minute timer and manual morning/evening
 practice marks. A playable harmonium keyboard opens when wanted.
 
+**[Open Hari](https://tsunekazu.github.io/Harimonium/)** in Chrome on your phone.
+
 ## Use
 
 Open the hosted app in Android Chrome and tap **Begin**. Use **Lower pitch** or
@@ -55,7 +57,7 @@ Before each changed release, update `VERSION` in `dist/sw.js`. A new version is
 offered via **Update Hari**; the app defers reload if practice has begun. Avoid
 reusing a cache version for changed files.
 
-The prepared GitHub repository is separate from the parent research workspace;
+The public GitHub repository is separate from the parent research workspace;
 personal notes and source conversations are not part of this app package.
 
 ## Sound and current limits
