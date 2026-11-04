@@ -87,3 +87,10 @@ JavaScript modules were served with the correct MIME type.
 
 The browser access host remains unavailable. Live HTTP verification confirms
 publication and asset integrity, not browser execution or Android installation.
+
+The reviewed release `2026-11-04-2` is now deployed at the same address. GitHub
+reported deployment commit `0499fd426e18eab5621d0b28d64d735bbbb3bb59` built,
+from app source commit `7262488`. All 26 live app/asset URLs were verified against
+the reviewed local files. All twelve recording hashes are identical to the
+first published release. The existing app offers this version through its
+normal Update Hari action; it does not force an active practice to reload.
