@@ -20,16 +20,22 @@ class MemoryCache {
     for (let index = 0; index < requests.length; index++) await this.put(requests[index], responses[index]);
   }
 }
-function harness(path = '/Hari/', existingCaches = new Map(), source = workerSource) {
+function harness(path = '/Hari/', existingCaches = new Map(), source = workerSource, abortController = AbortController) {
   const origin = 'https://example.github.io';
   const base = origin + path;
   const events = new Map();
-  const network = { online: true, fail: null, requests: [] };
-  const fetch = async input => {
+  const network = { online: true, fail: null, requests: [], workerText: source, stall: new Set() };
+  const fetch = async (input, options = {}) => {
     const url = typeof input === 'string' ? input : input.url;
     network.requests.push(url);
     if (!network.online) throw new TypeError('Network offline');
     if (url === network.fail) return new Response('Unavailable', { status: 503 });
+    if (network.stall.has(url)) return new Promise((resolve, reject) => {
+      const signal = options.signal || input.signal;
+      if (signal?.aborted) { reject(new Error('Aborted')); return; }
+      signal?.addEventListener('abort', () => reject(new Error('Aborted')), { once: true });
+    });
+    if (url === base + 'sw.js') return new Response(network.workerText);
     if (url === base + 'audio/manifest.json') return Response.json(manifest);
     return new Response(`asset:${url}`);
   };
@@ -48,11 +54,28 @@ function harness(path = '/Hari/', existingCaches = new Map(), source = workerSou
     skipWaiting() { calls.skipped++; return Promise.resolve(); },
     addEventListener(type, callback) { events.set(type, callback); },
   };
-  vm.runInNewContext(source, { self, caches, fetch, Request, Response, URL });
+  const timers = new Set();
+  const setTimeout = (callback, delay) => { const timer = { callback, delay }; timers.add(timer); return timer; };
+  const clearTimeout = timer => timers.delete(timer);
+  const runTimeout = delay => { for (const timer of [...timers]) if (timer.delay === delay) { timers.delete(timer); timer.callback(); } };
+  vm.runInNewContext(source, { self, caches, fetch, Request, Response, URL, AbortController: abortController, setTimeout, clearTimeout });
   const dispatch = (type, detail = {}) => {
-    let promise;
-    events.get(type)({ ...detail, waitUntil(value) { promise = value; }, respondWith(value) { promise = value; } });
-    return promise;
+    let response;
+    let dispatching = true;
+    const lifetimes = [];
+    events.get(type)({ ...detail,
+      waitUntil(value) { assert.equal(dispatching, true, 'lifetime must be registered synchronously'); lifetimes.push(value); },
+      respondWith(value) { response = value; },
+    });
+    dispatching = false;
+    if (type === 'fetch') return response ? { response, lifetime: Promise.all(lifetimes) } : undefined;
+    return Promise.all(lifetimes);
+  };
+  const fetchResponse = async request => {
+    const event = dispatch('fetch', { request });
+    const response = await event.response;
+    await event.lifetime;
+    return response;
   };
   const status = async () => {
     let result;
@@ -60,7 +83,7 @@ function harness(path = '/Hari/', existingCaches = new Map(), source = workerSou
     return result;
   };
   const request = (suffix, mode = 'cors', method = 'GET') => ({ url: base + suffix, mode, method });
-  return { base, caches, cacheMap: existingCaches, network, calls, dispatch, status, request };
+  return { base, caches, cacheMap: existingCaches, network, calls, dispatch, status, request, runTimeout, fetchResponse };
 }
 
 test('subpath install caches every required asset, including every recording', async () => {
@@ -124,12 +147,12 @@ test('offline root, query navigation, index and credits work; unrelated requests
   await worker.dispatch('install');
   worker.network.online = false;
   for (const suffix of ['', '?launch=installed', 'index.html?ref=home', 'credits.html']) {
-    const response = await worker.dispatch('fetch', { request: worker.request(suffix, 'navigate') });
+    const response = await worker.fetchResponse(worker.request(suffix, 'navigate'));
     assert.equal(response.status, 200);
     assert.ok((await response.text()).startsWith('asset:' + worker.base));
   }
   for (const asset of [...manifest.harmonium, manifest.tanpura]) {
-    const response = await worker.dispatch('fetch', { request: worker.request(asset.file) });
+    const response = await worker.fetchResponse(worker.request(asset.file));
     assert.equal(response.status, 200);
   }
   for (const request of [
@@ -147,9 +170,118 @@ test('readiness becomes false after a missing recording or unreadable manifest',
   const file = worker.base + manifest.tanpura.file;
   const previous = await cache.match(file);
   cache.entries.delete(file);
+  worker.network.online = false;
   assert.equal((await worker.status()).ready, false);
   await cache.put(file, previous);
   assert.equal((await worker.status()).ready, true);
   await cache.put(worker.base + 'audio/manifest.json', new Response('broken json'));
   assert.equal((await worker.status()).ready, false);
+});
+
+test('online status repairs missing shell and audio assets once, then supports offline reopen', async () => {
+  const worker = harness(); await worker.dispatch('install');
+  const cache = await worker.caches.open((await worker.caches.keys())[0]);
+  cache.entries.delete(worker.base + 'app.mjs');
+  cache.entries.delete(worker.base + 'audio/C3.wav');
+  worker.network.requests.length = 0;
+  const replies = await Promise.all([worker.status(), worker.status(), worker.status()]);
+  assert.ok(replies.every(reply => reply.ready));
+  assert.equal(worker.network.requests.filter(url => url === worker.base + 'sw.js').length, 1);
+  assert.equal(worker.network.requests.filter(url => url === worker.base + 'app.mjs').length, 1);
+  assert.equal(worker.network.requests.filter(url => url === worker.base + 'audio/C3.wav').length, 1);
+  worker.network.online = false;
+  assert.equal((await worker.fetchResponse(worker.request('app.mjs'))).status, 200);
+  assert.equal((await worker.fetchResponse(worker.request('audio/C3.wav'))).status, 200);
+  assert.equal((await worker.status()).ready, true);
+});
+
+test('successful fallback caches only known assets after a matching version probe', async () => {
+  const worker = harness(); await worker.dispatch('install');
+  const cache = await worker.caches.open((await worker.caches.keys())[0]);
+  cache.entries.delete(worker.base + 'audio/C3.wav');
+  assert.equal((await worker.fetchResponse(worker.request('audio/C3.wav'))).status, 200);
+  assert.ok(await cache.match(worker.base + 'audio/C3.wav'));
+  const probes = worker.network.requests.filter(url => url === worker.base + 'sw.js').length;
+  await worker.fetchResponse(worker.request('unrelated-private-file.txt'));
+  assert.equal(await cache.match(worker.base + 'unrelated-private-file.txt'), undefined);
+  assert.equal(worker.network.requests.filter(url => url === worker.base + 'sw.js').length, probes);
+});
+
+test('missing or invalid cached manifest can be recovered from the same release', async () => {
+  for (const corrupt of [false, true]) {
+    const worker = harness(); await worker.dispatch('install');
+    const cache = await worker.caches.open((await worker.caches.keys())[0]);
+    if (corrupt) await cache.put(worker.base + 'audio/manifest.json', new Response('broken json'));
+    else cache.entries.clear();
+    assert.equal((await worker.status()).ready, true);
+    assert.ok(await cache.match(worker.base + 'audio/C3.wav'));
+  }
+});
+
+test('a newer or unparseable server worker cannot mix new shell into an old cache', async () => {
+  for (const workerText of ["const VERSION = 'newer-release';", 'unparseable worker']) {
+    const worker = harness(); await worker.dispatch('install');
+    const cache = await worker.caches.open((await worker.caches.keys())[0]);
+    const retained = await (await cache.match(worker.base + 'core.mjs')).text();
+    cache.entries.delete(worker.base + 'app.mjs'); worker.network.workerText = workerText;
+    assert.equal((await worker.status()).ready, false);
+    assert.equal(await cache.match(worker.base + 'app.mjs'), undefined);
+    assert.equal((await worker.fetchResponse(worker.request('app.mjs'))).status, 200);
+    assert.equal(await cache.match(worker.base + 'app.mjs'), undefined, 'online fallback must not persist a different release');
+    worker.network.online = false;
+    assert.equal(await (await worker.fetchResponse(worker.request('core.mjs'))).text(), retained);
+  }
+});
+
+test('failed repair keeps cached assets usable and retries only missing entries later', async () => {
+  const worker = harness(); await worker.dispatch('install');
+  const cache = await worker.caches.open((await worker.caches.keys())[0]);
+  cache.entries.delete(worker.base + 'audio/C3.wav'); worker.network.fail = worker.base + 'audio/C3.wav';
+  assert.equal((await worker.status()).ready, false);
+  assert.ok(await cache.match(worker.base + 'app.mjs'));
+  worker.network.fail = null; assert.equal((await worker.status()).ready, true);
+  cache.entries.delete(worker.base + 'audio/C3.wav'); worker.network.fail = worker.base + 'sw.js';
+  assert.equal((await worker.status()).ready, false);
+  assert.equal(await cache.match(worker.base + 'audio/C3.wav'), undefined);
+});
+
+test('stalled version probe and bulk repair abort within their separate deadlines and remain retryable', async () => {
+  const flush = async () => { for (let i = 0; i < 4; i++) await new Promise(setImmediate); };
+  const worker = harness(); await worker.dispatch('install');
+  const cache = await worker.caches.open((await worker.caches.keys())[0]);
+  const file = worker.base + 'audio/C3.wav'; cache.entries.delete(file);
+  worker.network.stall.add(worker.base + 'sw.js');
+  let reply = worker.status(); await flush(); worker.runTimeout(5000);
+  assert.equal((await reply).ready, false);
+  worker.network.stall.clear(); worker.network.stall.add(file);
+  reply = worker.status(); await flush(); worker.runTimeout(12000);
+  assert.equal((await reply).ready, false);
+  worker.network.stall.clear(); assert.equal((await worker.status()).ready, true);
+});
+
+test('a browser without abort support still receives online fallbacks without an unbounded repair', async () => {
+  const worker = harness('/Hari/', new Map(), workerSource, null); await worker.dispatch('install');
+  const cache = await worker.caches.open((await worker.caches.keys())[0]);
+  cache.entries.delete(worker.base + 'app.mjs');
+  assert.equal((await worker.status()).ready, false);
+  assert.equal((await worker.fetchResponse(worker.request('app.mjs'))).status, 200);
+  assert.equal(await cache.match(worker.base + 'app.mjs'), undefined);
+});
+
+test('a stalled repair version probe cannot delay a successful online asset response', async () => {
+  const worker = harness(); await worker.dispatch('install');
+  const cache = await worker.caches.open((await worker.caches.keys())[0]);
+  const file = worker.base + 'audio/C3.wav'; cache.entries.delete(file);
+  worker.network.stall.add(worker.base + 'sw.js');
+  const event = worker.dispatch('fetch', { request: worker.request('audio/C3.wav') });
+  let lifetimeSettled = false;
+  event.lifetime.then(() => { lifetimeSettled = true; });
+  const response = await Promise.race([event.response, new Promise(resolve => setImmediate(() => resolve(null)))]);
+  assert.ok(response, 'online response must be delivered before the repair probe completes');
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), `asset:${file}`);
+  for (let i = 0; i < 4; i++) await new Promise(setImmediate);
+  assert.equal(lifetimeSettled, false, 'background caching must keep its separately registered lifetime');
+  worker.runTimeout(5000); await event.lifetime;
+  assert.equal(await cache.match(file), undefined, 'a failed version probe cannot write cache data');
 });

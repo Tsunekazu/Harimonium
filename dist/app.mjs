@@ -17,6 +17,7 @@ const timer = new PracticeTimer(settings.minutes).restore(readStored(TIMER_KEY))
 if (timer.state !== 'idle') settings.minutes = timer.minutes;
 const audio = new HariAudio();
 const holds = new NoteHolds();
+const unsavedMarks = new Map();
 let generation = 0;
 let pending = null;
 let toneOn = false;
@@ -35,11 +36,23 @@ let requestedUpdate = false;
 let reloadReady = false;
 const awake = new ScreenAwake(navigator, document, text => { $('wake-status').textContent = text; });
 
+function mergeUnsavedMarks() {
+  for (const [date, changes] of unsavedMarks) {
+    settings.marks[date] = { morning: false, evening: false, ...settings.marks[date], ...changes };
+  }
+}
+function refreshStoredMarks() {
+  const stored = readStored(SETTINGS_KEY);
+  if (stored) settings.marks = sanitizeSettings(stored).marks;
+  mergeUnsavedMarks();
+}
 function persist() {
   const snapshot = timer.snapshot();
   handleCompletion();
+  refreshStoredMarks();
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    unsavedMarks.clear();
     localStorage.setItem(TIMER_KEY, JSON.stringify(snapshot));
     $('storage-status').textContent = 'Your practice marks are saved on this device.';
   } catch { $('storage-status').textContent = 'Storage is unavailable. These marks will only last for this visit.'; }
@@ -103,7 +116,7 @@ function clearKeys() {
 }
 function invalidateStarts() { generation++; pending = null; }
 function stopAllSound(message = '') {
-  invalidateStarts(); holds.clear(); audio.stop(); toneOn = false; needsResume = false;
+  invalidateStarts(); holds.clear(); audio.stop(); toneOn = false; needsResume = false; bellEligible = false;
   renderKeys(); renderSound(); renderTimer(); updateAwake();
   if (message) setStatus(message);
 }
@@ -127,7 +140,7 @@ async function activate(action) {
     await audio.enable(); observeContext();
     if (!isCurrent(mine)) return null;
     audio.setLevels(settings.volume, settings.droneVolume);
-    keyboardReady = true; $('enable-keys').hidden = true; needsResume = false;
+    keyboardReady = true; $('enable-keys').hidden = true;
     return mine;
   } catch (error) {
     if (mine === generation) {
@@ -173,17 +186,18 @@ async function beginPractice() {
   const ticket = await activate('practice');
   if (!isCurrent(ticket)) return;
   try {
-    startSelectedSound(); timer.start(); completionHandled = false; bellEligible = true;
+    startSelectedSound(); timer.start(); completionHandled = false; bellEligible = true; needsResume = false;
     $('timer-announcement').textContent = '';
     setStatus(currentSoundDescription()); persist(); renderTimer(); updateAwake();
   } catch (error) { setStatus(error.message); }
 }
 $('timer-start').addEventListener('click', beginPractice);
 $('timer-reset').addEventListener('click', () => {
+  if (timer.state === 'running') return;
   timer.reset(settings.minutes); completionHandled = false; bellEligible = false; stopAllSound('Ready when you are.');
   $('timer-announcement').textContent = ''; persist(); renderTimer();
 });
-$('stop').addEventListener('click', () => stopAllSound(timer.state === 'running' ? 'Sound stopped. Your timer is still running.' : 'Sound stopped.'));
+$('stop').addEventListener('click', () => stopAllSound(timer.state === 'running' ? 'Sound stopped. Your timer continues silently, without a finishing bell.' : 'Sound stopped.'));
 $('preview').addEventListener('click', async () => {
   if (toneOn || pending) {
     invalidateStarts(); audio.setAccompaniment('silent', rootMidi(), settings.cents); toneOn = false;
@@ -192,7 +206,12 @@ $('preview').addEventListener('click', async () => {
   }
   const ticket = await activate('preview');
   if (!isCurrent(ticket)) return;
-  try { startSelectedSound(); setStatus('Find a comfortable pitch for your voice.'); }
+  try {
+    startSelectedSound();
+    if (timer.state === 'running') {
+      needsResume = false; bellEligible = true; renderSound(); setStatus(currentSoundDescription());
+    } else setStatus('Find a comfortable pitch for your voice.');
+  }
   catch (error) { setStatus(error.message); }
 });
 $('session-return').addEventListener('click', async () => {
@@ -211,7 +230,9 @@ $('session-return').addEventListener('click', async () => {
   const ticket = await activate('resume');
   if (!isCurrent(ticket)) return;
   try {
-    if (timer.state === 'running') { startSelectedSound(); bellEligible = true; setStatus(currentSoundDescription()); }
+    if (timer.state === 'running') {
+      startSelectedSound(); bellEligible = true; needsResume = false; renderSound(); setStatus(currentSoundDescription());
+    }
   } catch (error) { setStatus(error.message); }
 });
 $('enable-keys').addEventListener('click', async () => {
@@ -242,7 +263,7 @@ function renderTimer() {
   $('practice-stage').dataset.state = timer.state;
   $('timer-start').disabled = pending !== null;
   $('timer-start').textContent = pending === 'practice' ? 'Preparing…' : timer.state === 'running' ? 'Pause' : timer.state === 'paused' ? 'Resume practice' : timer.state === 'complete' ? 'Begin again' : `Begin ${settings.minutes} minutes`;
-  $('timer-reset').hidden = timer.state === 'idle' && pending !== 'practice';
+  $('timer-reset').hidden = timer.state === 'running' || (timer.state === 'idle' && pending !== 'practice');
   document.querySelectorAll('.preset').forEach(button => {
     button.disabled = timer.state === 'running' || timer.state === 'paused' || pending === 'practice';
     button.setAttribute('aria-pressed', String(Number(button.dataset.minutes) === settings.minutes));
@@ -271,7 +292,7 @@ document.querySelectorAll('.sound-choice').forEach(button => button.addEventList
     if (!isCurrent(ticket)) return;
     try {
       startSelectedSound();
-      if (timer.state === 'running') bellEligible = true;
+      if (timer.state === 'running') { bellEligible = true; needsResume = false; renderSound(); }
       setStatus(currentSoundDescription());
     } catch (error) { setStatus(error.message); }
   }
@@ -357,15 +378,15 @@ function renderMarks() {
   }
 }
 for (const period of ['morning', 'evening']) $(period).addEventListener('click', () => {
-  const stored = readStored(SETTINGS_KEY);
-  if (stored) settings.marks = sanitizeSettings(stored).marks;
+  refreshStoredMarks();
   const date = localDate(); const old = settings.marks[date] || { morning: false, evening: false };
   settings.marks[date] = { ...old, [period]: !old[period] };
+  unsavedMarks.set(date, { ...unsavedMarks.get(date), [period]: !old[period] });
   persist(); renderMarks();
 });
 window.addEventListener('storage', event => {
   if (event.key !== SETTINGS_KEY) return;
-  settings.marks = sanitizeSettings(readStored(SETTINGS_KEY)).marks; renderMarks();
+  settings.marks = sanitizeSettings(readStored(SETTINGS_KEY)).marks; mergeUnsavedMarks(); renderMarks();
 });
 window.addEventListener('blur', () => {
   if (pending) { invalidateStarts(); renderTimer(); }
@@ -393,7 +414,8 @@ $('install').addEventListener('click', async () => {
 window.addEventListener('appinstalled', () => { installPrompt = null; $('install').hidden = true; });
 function practiceBusy() { return timer.state === 'running' || timer.state === 'paused' || sounding() || pending; }
 $('update').addEventListener('click', () => {
-  if (practiceBusy()) { setStatus('Finish or reset your practice before updating.'); return; }
+  if (timer.state === 'running' || timer.state === 'paused') { setStatus('Finish your practice, or pause and reset it, before updating.'); return; }
+  if (sounding() || pending) { setStatus('Stop sound before updating.'); return; }
   if (reloadReady) { location.reload(); return; }
   if (!updateWorker || requestedUpdate) return;
   requestedUpdate = true; $('update').disabled = true; $('update').textContent = 'Applying update…';
@@ -430,7 +452,7 @@ async function setupOffline() {
     const ready = await navigator.serviceWorker.ready;
     const channel = new MessageChannel();
     clearTimeout(timeout);
-    timeout = setTimeout(() => { $('offline-status').textContent = 'Offline readiness has not been confirmed.'; channel.port1.close(); }, 5000);
+    timeout = setTimeout(() => { $('offline-status').textContent = 'Offline readiness has not been confirmed.'; channel.port1.close(); }, 20000);
     channel.port1.onmessage = event => {
       channel.port1.close();
       reportOffline(event.data?.ready ? 'Available offline' : 'Offline save did not finish.');

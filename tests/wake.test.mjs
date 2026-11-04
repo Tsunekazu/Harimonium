@@ -42,6 +42,7 @@ test('a request rejected by the device leaves the helper retryable', async () =>
   const awake = new ScreenAwake({ wakeLock: { request: async () => { if (++requests === 1) throw Error('denied'); return lock; } } }, { hidden: false }, text => reports.push(text));
   awake.setWanted(true); await settle();
   assert.equal(awake.pending, false);
+  assert.equal(requests, 1, 'a device denial must not cause an automatic retry loop');
   assert.match(reports.at(-1), /declined/);
   await awake.refresh();
   assert.equal(awake.lock, lock);
@@ -77,4 +78,35 @@ test('a delayed previous release cannot overwrite the newly acquired lock status
   assert.equal(reports.at(-1), 'Screen awake');
   delayedRelease.resolve(); await settle();
   assert.equal(reports.at(-1), 'Screen awake');
+});
+
+test('returning visible during a late hidden request release reacquires after it settles', async () => {
+  const requestGate = deferred(); const releaseGate = deferred();
+  const document = { hidden: false }; const first = sentinel(); const second = sentinel();
+  first.release = () => releaseGate.promise;
+  let requests = 0;
+  const awake = new ScreenAwake({ wakeLock: { request: () => ++requests === 1 ? requestGate.promise : Promise.resolve(second) } }, document, () => {});
+  awake.setWanted(true);
+  document.hidden = true; await awake.refresh();
+  requestGate.resolve(first); await settle();
+  document.hidden = false; await awake.refresh();
+  assert.equal(awake.pending, true);
+  assert.equal(requests, 1);
+  releaseGate.resolve(); await settle();
+  assert.equal(requests, 2);
+  assert.equal(awake.lock, second);
+  assert.equal(awake.pending, false);
+});
+
+test('a late hidden release does not retry after practice was stopped', async () => {
+  const requestGate = deferred(); const releaseGate = deferred();
+  const document = { hidden: false }; const lock = sentinel(); lock.release = () => releaseGate.promise;
+  let requests = 0;
+  const awake = new ScreenAwake({ wakeLock: { request: () => { requests++; return requestGate.promise; } } }, document, () => {});
+  awake.setWanted(true);
+  document.hidden = true; await awake.refresh(); requestGate.resolve(lock); await settle();
+  awake.setWanted(false); document.hidden = false; await awake.refresh();
+  releaseGate.resolve(); await settle();
+  assert.equal(requests, 1);
+  assert.equal(awake.lock, null);
 });

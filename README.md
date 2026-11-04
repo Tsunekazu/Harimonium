@@ -16,6 +16,10 @@ Keep the app visible during practice. It asks the browser to keep the screen
 awake automatically. Morning and Evening are marks you make yourself; tap again
 to undo. Finishing the timer does not mark either practice for you.
 
+**Stop sound** also turns off the finishing bell while the timer continues.
+To reset a running session, pause it first. Returning to a session offers an
+explicit sound-resume action; enabling the optional keyboard keeps that choice.
+
 Home-screen installation is optional. Use **Install Hari** when offered, or
 Chrome's menu → **Install and create shortcut** → **Install**. Wait until the
 footer says **Available offline** before expecting to use the complete app

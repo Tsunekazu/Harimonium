@@ -17,6 +17,14 @@ because loading finishes. No new assets or changed recordings are introduced.
   on unsupported audio, failed loading/decoding, a closed context, or an interrupted
   or blocked resume. Failed loads can be retried. Never display sound as playing
   based only on the user's requested state.
+  Each shared loading attempt has a 45-second deadline covering manifest fetch,
+  recording fetches and decoding, starting after context resume. Timeout rejects
+  all callers with a retry/Silence suggestion, aborts outstanding fetches, clears
+  the shared failed attempt and allows the next `enable()` to retry. Successful
+  loads clear their deadline. Browser suspension can delay JavaScript timeout
+  delivery; this is not a guaranteed wall-clock alarm or a deadline for the
+  browser's own `resume()` promise. Web Audio cannot cancel an in-flight decode:
+  its late result is ignored and cannot replace a newer attempt's recordings.
 - `ready` is a getter: samples decoded **and** context currently running. `context`
   is available for observing state. The engine clears voices on suspension or
   interruption; the controller should clear its own held-key and playing display
@@ -49,7 +57,8 @@ because loading finishes. No new assets or changed recordings are introduced.
 
 `enable()` and `enableBell()` do not own session intent. A pending
 promise can resolve after Stop, key-up, blur, page hiding, or a changed selection.
-The controller must invalidate pending starts and check intent **after every
+Stop does not restart a pending load or its deadline. The controller must
+invalidate pending starts and check intent **after every
 await**, before starting a voice. For example:
 
 ```js
@@ -100,7 +109,8 @@ weakly on a small phone speaker. The compressor and moderate defaults are not a
 proof that every polyphonic mix, output device, or volume setting cannot clip.
 
 `node tests/audio.test.mjs` checks bell-only setup without sample fetching, later
-full sample loading on the same context, graph construction, concurrent loading/retry,
+full sample loading on the same context, stalled-fetch timeout/abort/retry, stale
+decoder isolation, graph construction, concurrent loading/retry,
 voice independence, fine pitch, bounded held polyphony, accompaniment replacement,
 stop/bell lifetimes, interruption recovery, a release fallback for browsers without
 `cancelAndHoldAtTime`, and every recorded file's manifest byte count and SHA-256.

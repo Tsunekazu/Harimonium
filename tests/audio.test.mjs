@@ -269,3 +269,77 @@ test('bell-only enable fetches no recordings and later full enable reuses its co
   assert.equal(audio.ready, true);
   assert.equal(audio.noteOn('key', 48), true);
 });
+
+function fakeLoadDeadline(t) {
+  const originalSet = globalThis.setTimeout;
+  const originalClear = globalThis.clearTimeout;
+  const timers = [];
+  globalThis.setTimeout = (callback, delay) => {
+    const timer = { callback, delay, cancelled: false };
+    timers.push(timer);
+    return timer;
+  };
+  globalThis.clearTimeout = timer => { timer.cancelled = true; };
+  t.after(() => { globalThis.setTimeout = originalSet; globalThis.clearTimeout = originalClear; });
+  return timers;
+}
+const settleAudio = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+
+test('a stalled shared fetch times out, aborts network work and permits a fresh retry', async t => {
+  let stalled = true;
+  const signals = [];
+  const { audio } = await fixture(t, async (path, options) => {
+    signals.push(options.signal);
+    if (stalled) return new Promise(() => {});
+    if (path.endsWith('manifest.json')) return { ok: true, json: async () => structuredClone(manifest) };
+    return { ok: true, arrayBuffer: async () => new ArrayBuffer(16) };
+  });
+  const deadlines = fakeLoadDeadline(t);
+  const first = audio.enable();
+  const second = audio.enable();
+  const firstRejected = assert.rejects(first, /too long.*Try again.*Silence/);
+  const secondRejected = assert.rejects(second, /too long/);
+  await settleAudio();
+  assert.equal(deadlines.length, 1, 'concurrent callers share one deadline');
+  assert.equal(deadlines[0].delay, 45_000);
+  assert.equal(signals.length, 1);
+  audio.stop();
+  deadlines[0].callback();
+  await Promise.all([firstRejected, secondRejected]);
+  assert.equal(signals[0].aborted, true);
+  assert.equal(audio.loading, null);
+  assert.equal(audio.ready, false);
+  assert.equal(deadlines[0].cancelled, true);
+  stalled = false;
+  await audio.enable();
+  assert.equal(audio.ready, true);
+  assert.equal(Context.instances.length, 1);
+  assert.equal(deadlines[1].cancelled, true, 'successful retry clears its deadline');
+  assert.equal(audio.active.size, 0);
+});
+
+test('a late decoder from a timed-out load cannot publish over a successful retry', async t => {
+  const { audio } = await fixture(t);
+  const deadlines = fakeLoadDeadline(t);
+  await audio.enableBell();
+  let finishOld;
+  const oldDecode = new Promise(resolve => { finishOld = resolve; });
+  audio.context.decodeAudioData = () => oldDecode;
+  const first = audio.enable();
+  const rejected = assert.rejects(first, /too long/);
+  await settleAudio();
+  deadlines[0].callback();
+  await rejected;
+  assert.equal(audio.samplesReady, false);
+  const freshBuffer = { decoded: 'fresh attempt' };
+  audio.context.decodeAudioData = async () => freshBuffer;
+  await audio.enable();
+  const freshManifest = audio.manifest;
+  assert.equal(audio.manifest.harmonium[0].buffer, freshBuffer);
+  finishOld({ decoded: 'stale attempt' });
+  await settleAudio();
+  assert.equal(audio.manifest, freshManifest);
+  assert.ok([...audio.manifest.harmonium, audio.manifest.tanpura].every(sample => sample.buffer === freshBuffer));
+  assert.equal(audio.ready, true);
+  assert.equal(audio.active.size, 0);
+});

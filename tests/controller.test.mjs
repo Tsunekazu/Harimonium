@@ -21,7 +21,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-async function harness({ stored = {}, gate = null, bellGate = null, audioFailure = null, bellFailure = null, storageFailure = false, serviceWorker = null } = {}) {
+async function harness({ stored = {}, gate = null, bellGate = null, audioFailure = null, bellFailure = null, storageFailure = false, storageWriteFailure = false, serviceWorker = null } = {}) {
   const { document, window } = parseHTML(html);
   document.hidden = false;
   const clock = { now: initialTime };
@@ -69,7 +69,7 @@ async function harness({ stored = {}, gate = null, bellGate = null, audioFailure
     document, window, navigator: serviceWorker ? { serviceWorker } : {}, Date: ClockDate, console, location,
     localStorage: {
       getItem: key => { if (storageFailure) throw Error('denied'); return storage.get(key) ?? null; },
-      setItem: (key, value) => { if (storageFailure) throw Error('denied'); storage.set(key, value); },
+      setItem: (key, value) => { if (storageFailure || storageWriteFailure) throw Error('denied'); storage.set(key, value); },
     },
     setInterval: callback => { intervals.push(callback); return intervals.length; },
     setTimeout: (callback, delay) => { const entry = { callback, delay, canceled: false }; timeouts.push(entry); return entry; },
@@ -87,6 +87,7 @@ async function harness({ stored = {}, gate = null, bellGate = null, audioFailure
   async function chooseSound(sound) { document.querySelector(`[data-sound="${sound}"]`).dispatchEvent(new window.Event('click', { bubbles: true })); await settle(); }
   async function visibility(hidden) { document.hidden = hidden; document.dispatchEvent(new window.Event('visibilitychange')); await settle(); }
   return { $, audio, clock, storage, document, window, location, click, chooseSound, visibility,
+    setStorageWriteFailure: value => { storageWriteFailure = value; },
     fireTimeout: async delay => { for (const entry of timeouts) if (entry.delay === delay && !entry.canceled) { entry.canceled = true; entry.callback(); } await settle(); },
     tick: async () => { for (const fn of intervals) fn(); await settle(); },
     timer: () => JSON.parse(storage.get(TIMER) ?? 'null'),
@@ -108,6 +109,10 @@ test('Begin, pause, resume and reset drive the actual controller and preserve ma
   h.clock.now += 600_000; await h.tick();
   assert.equal(h.$('countdown').textContent, '09:00');
   await h.click('timer-start'); assert.equal(h.timer().state, 'running');
+  assert.equal(h.$('timer-reset').hidden, true);
+  await h.click('timer-start');
+  assert.equal(h.timer().state, 'paused');
+  assert.equal(h.$('timer-reset').hidden, false);
   await h.click('timer-reset');
   assert.equal(h.timer().state, 'idle');
   assert.equal(h.$('countdown').textContent, '10:00');
@@ -272,6 +277,7 @@ test('an update requested before Begin never reloads an active session', async (
   assert.equal(h.$('update').textContent, 'Reload update');
   assert.equal(h.$('update').disabled, false);
   await h.click('update'); assert.equal(h.location.reloads, 0);
+  await h.click('timer-start'); // Pause before exposing Reset.
   await h.click('timer-reset'); await h.click('update');
   assert.equal(h.location.reloads, 1);
 });
@@ -306,4 +312,111 @@ test('switching back to Silence during recording load cancels stale accompanimen
   assert.equal(h.timer().state, 'running');
   assert.equal(h.timer().endAt, deadline);
   assert.equal(h.$('timer-start').disabled, false);
+});
+
+test('enabling keyboard preserves restored session recovery and does not rearm its finishing bell', async () => {
+  for (const sound of ['sa', 'silent']) {
+    const h = await harness({ stored: {
+      [SETTINGS]: { sound },
+      [TIMER]: { version: 1, minutes: 10, state: 'running', remaining: 60_000, endAt: initialTime + 60_000 },
+    } });
+    assert.equal(h.$('session-return').hidden, false);
+    await h.click('enable-keys');
+    assert.equal(h.$('enable-keys').hidden, true);
+    assert.equal(h.$('session-return').hidden, false, 'keyboard setup must leave session recovery available');
+    assert.equal(h.audio.accompaniment, 'silent');
+    h.clock.now += 60_000; await h.tick();
+    assert.equal(h.$('practice-stage').dataset.state, 'complete');
+    assert.equal(h.audio.bells, 0, 'keyboard setup alone must not arm a restored timer bell');
+  }
+});
+
+test('Hear tone restores both accompaniment and the finishing bell of a running session', async () => {
+  const deadline = initialTime + 60_000;
+  const h = await harness({ stored: {
+    [TIMER]: { version: 1, minutes: 10, state: 'running', remaining: 60_000, endAt: deadline },
+  } });
+  await h.click('preview');
+  assert.equal(h.audio.accompaniment, 'sa');
+  assert.equal(h.$('session-return').hidden, true);
+  assert.equal(h.$('practice-stage').dataset.state, 'running');
+  assert.equal(h.timer().endAt, deadline, 'resuming sound must not restart the timer');
+  h.clock.now = deadline; await h.tick(); await h.tick();
+  assert.equal(h.audio.bells, 1);
+});
+
+test('readable stale storage cannot overwrite unsaved manual toggles when writes fail', async () => {
+  const h = await harness({ storageWriteFailure: true, stored: { [SETTINGS]: { marks: {} } } });
+  await h.click('morning');
+  assert.equal(h.$('morning').getAttribute('aria-pressed'), 'true');
+  await h.click('morning');
+  assert.equal(h.$('morning').getAttribute('aria-pressed'), 'false', 'the unsaved first mark must remain toggleable');
+  await h.click('morning'); await h.click('evening');
+  assert.equal(h.$('morning').getAttribute('aria-pressed'), 'true', 'adding evening must preserve unsaved morning');
+  assert.equal(h.$('evening').getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(h.settings().marks, {}, 'the fixture really retains stale persisted marks');
+  assert.match(h.$('storage-status').textContent, /only last for this visit/);
+  await h.click('evening');
+  assert.equal(h.$('morning').getAttribute('aria-pressed'), 'true');
+  assert.equal(h.$('evening').getAttribute('aria-pressed'), 'false');
+});
+
+test('Stop sound leaves an active timer running but suppresses its later completion bell', async () => {
+  for (const sound of ['sa', 'silent']) {
+    const h = await harness({ stored: { [SETTINGS]: { sound } } });
+    await h.click('timer-start');
+    const deadline = h.timer().endAt;
+    await h.click('stop');
+    assert.equal(h.$('practice-stage').dataset.state, 'running');
+    assert.equal(h.audio.accompaniment, 'silent');
+    assert.match(h.$('sound-status').textContent, /timer continues silently/);
+    h.clock.now = deadline; await h.tick(); await h.tick();
+    assert.equal(h.$('practice-stage').dataset.state, 'complete');
+    assert.equal(h.audio.bells, 0);
+    assert.deepEqual(h.settings().marks, {});
+  }
+});
+
+test('updating after completion with a continuing tone explains that sound must stop', async () => {
+  const messages = [];
+  const waiting = { postMessage: message => messages.push(message) };
+  const worker = new EventTarget();
+  worker.controller = {};
+  worker.register = async () => Object.assign(new EventTarget(), { installing: null, waiting, active: {} });
+  worker.ready = new Promise(() => {});
+  const h = await harness({ serviceWorker: worker });
+  await h.click('timer-start');
+  h.clock.now += 600_000; await h.tick();
+  assert.equal(h.$('practice-stage').dataset.state, 'complete');
+  assert.equal(h.audio.accompaniment, 'sa');
+  await h.click('update');
+  assert.equal(messages.length, 0);
+  assert.match(h.$('sound-status').textContent, /stop (?:all )?sound/i);
+  await h.click('stop'); await h.click('update');
+  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ type: 'ACTIVATE_UPDATE' }]);
+});
+
+test('unsaved marks recover after transient write failure while preserving another tab’s different-period change', async () => {
+  const date = '2026-11-04';
+  const h = await harness({ storageWriteFailure: true, stored: { [SETTINGS]: { marks: {} } } });
+  await h.click('morning');
+  assert.equal(h.$('morning').getAttribute('aria-pressed'), 'true');
+  const remote = { marks: { [date]: { morning: false, evening: true }, '2026-11-03': { morning: true, evening: false } } };
+  h.storage.set(SETTINGS, JSON.stringify(remote));
+  const event = new h.window.Event('storage'); event.key = SETTINGS;
+  h.window.dispatchEvent(event); await settle();
+  assert.equal(h.$('morning').getAttribute('aria-pressed'), 'true', 'unsaved local morning survives a storage event');
+  assert.equal(h.$('evening').getAttribute('aria-pressed'), 'true', 'different-period remote change is merged');
+  h.setStorageWriteFailure(false);
+  await h.click('pitch-up'); // A normal settings save retries pending marks.
+  assert.deepEqual(h.settings().marks, {
+    [date]: { morning: true, evening: true },
+    '2026-11-03': { morning: true, evening: false },
+  });
+  assert.match(h.$('storage-status').textContent, /saved on this device/);
+  // A later remote edit must apply: successfully saved marks are no longer dirty.
+  h.storage.set(SETTINGS, JSON.stringify(remote));
+  h.window.dispatchEvent(event); await settle();
+  assert.equal(h.$('morning').getAttribute('aria-pressed'), 'false');
+  assert.equal(h.$('evening').getAttribute('aria-pressed'), 'true');
 });

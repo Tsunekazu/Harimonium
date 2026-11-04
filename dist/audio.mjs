@@ -50,30 +50,52 @@ export class HariAudio {
 
   async enable() {
     await this.enableBell();
-    if (!this.loading) {
-      this.loading = this.load().catch(error => { this.loading = null; throw error; });
-    }
+    if (!this.loading) this.startLoading();
     await this.loading;
     if (!this.ready) throw new Error('Audio was interrupted. Tap again to enable sound.');
     return true;
   }
 
-  async load() {
-    const response = await fetch('./audio/manifest.json');
+  startLoading() {
+    const controller = new AbortController();
+    let timeout;
+    const deadline = new Promise((_, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error('The sounds took too long to load. Try again, or choose Silence to practise without them.'));
+        controller.abort();
+      }, 45_000);
+    });
+    // Only the winning complete load can publish. A timed-out decoder cannot
+    // be cancelled by Web Audio, but its late result stays private to that load.
+    const attempt = Promise.race([this.load(controller.signal), deadline]).then(manifest => {
+      this.manifest = manifest;
+      this.samplesReady = true;
+    }).catch(error => {
+      controller.abort();
+      if (this.loading === attempt) this.loading = null;
+      throw error;
+    }).finally(() => clearTimeout(timeout));
+    this.loading = attempt;
+  }
+
+  async load(signal) {
+    const response = await fetch('./audio/manifest.json', { signal });
     if (!response.ok) throw new Error('The sound files could not be loaded. Reload while online.');
     const manifest = await response.json();
     if (!Array.isArray(manifest.harmonium) || !manifest.harmonium.length || !manifest.tanpura) {
       throw new Error('The sound manifest is incomplete. Reload while online.');
     }
+    if (signal.aborted) throw new Error('Sound loading was cancelled.');
     const entries = [...manifest.harmonium, manifest.tanpura];
     await Promise.all(entries.map(async entry => {
-      const file = await fetch(`./${entry.file}`);
+      const file = await fetch(`./${entry.file}`, { signal });
       if (!file.ok) throw new Error('A sound file is missing. Reload while online.');
-      entry.buffer = await this.context.decodeAudioData(await file.arrayBuffer());
+      const bytes = await file.arrayBuffer();
+      if (signal.aborted) throw new Error('Sound loading was cancelled.');
+      entry.buffer = await this.context.decodeAudioData(bytes);
     }));
-    // Publish only a completely decoded set. Retrying cannot expose partial data.
-    this.manifest = manifest;
-    this.samplesReady = true;
+    if (signal.aborted) throw new Error('Sound loading was cancelled.');
+    return manifest;
   }
 
   track(source, gain, envelope) {

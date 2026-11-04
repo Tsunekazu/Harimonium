@@ -65,12 +65,12 @@ Delayed ticks still show elapsed time correctly. Runtime clock rollback cannot
 increase displayed remaining time, but clock changes cannot preserve an exact
 real-time guarantee.
 
-The controller must never ring on restore. For a live completion sound, capture
-the prior state, call `tick()`, and ring only on `running` → `complete` while
-visible, with a recent original `endAt` (for example no more than 15 seconds
-late). Persistence or display reads may also complete the timer, so a missed
-sound is preferable to replaying a stale completion. Do not automatically mark
-Morning or Evening when time expires.
+The controller must never ring on restore. A live completion is handled once,
+whether `tick()` or a persistence snapshot first observes it. The bell requires
+an eligible active session, a visible page, and an original `endAt` no more than
+two seconds in the past. Stop sound disables that session's finishing bell;
+enabling keyboard keys does not silently restore accompaniment or bell intent.
+Do not automatically mark Morning or Evening when time expires.
 
 ## Notes and pitch
 
@@ -89,3 +89,27 @@ swara steps. `playbackRate(sample, midi, cents = 0)` compensates
 distance ties in original array order. `noteName(midi)` names the MIDI pitch.
 
 Run focused checks with `node --test tests/core.test.mjs` from `hari-app`.
+
+## Screen and offline recovery
+
+`ScreenAwake` requests a visible session's screen lock and releases stale
+sentinels. If visibility returns while a late hidden request is still releasing,
+it makes one new request after release. Device denials do not trigger automatic
+retry loops. This is a request to the browser, not a guarantee against screen
+sleep or operating-system interruption.
+
+The worker checks that every shell and manifest recording is cached before
+reporting offline readiness. An online readiness check can repair missing known
+assets; successful known-asset network fallbacks can also be saved. Repair first
+fetches the server worker and reads its fixed `const VERSION` declaration without
+evaluating it. A missing, unreadable, or different version prevents repair into
+the current release's cache. Existing cached files remain usable. An available
+new release follows the normal update path instead.
+
+Concurrent readiness repairs share one task. The version probe has a five-second
+network deadline; bulk repair has a twelve-second deadline and at most four
+simultaneous asset requests. Failure leaves readiness false and preserves cached
+entries; a later online check can retry missing files. Only the known shell and
+the cached manifest's validated audio file paths are eligible. Tests model these
+state and cache contracts; they do not establish Android wake-lock or installed
+offline behavior.

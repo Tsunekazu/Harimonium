@@ -10,7 +10,8 @@ hosting. Prepared audio totals about 4.8 MB.
 
 ## Automated evidence
 
-`npm test` passes all five test files:
+All five test files pass, with 75 focused checks in the final review run
+(audio 12, controller 23, core 19, offline 13, wake lock 8):
 
 - Core: pitch/sample selection, multiple-contact note ownership and latch
   release, validated settings, local calendar dates, timer transitions and
@@ -47,6 +48,30 @@ For the first phone trial, open the HTTPS link and listen to one steady Sa at a
 comfortable pitch. A later full session can verify the finishing bell and
 screen staying awake. Offline use needs one complete online cache first.
 
+## Final review pass — release 2026-11-04-2
+
+The practice-first layout and the sound recordings/mix are preserved. Review
+reproduced and fixed these concrete edge cases:
+
+- Enabling keyboard keys after restoring a timer no longer hides the separate
+  sound-resume action. Resuming via Hear tone restores the finishing bell too.
+- Manual marks remain reversible when reads succeed but storage writes fail.
+  Pending changes merge with another tab's marks and clear after a successful
+  save, instead of being replaced by stale storage.
+- Returning while a late hidden wake-lock request is releasing no longer loses
+  the next visible request. A denial does not cause repeated requests.
+- Missing cached app/audio files can repair themselves online. Repair accepts
+  only known assets and the same server release, has bounded network waits,
+  and keeps online response delivery independent of background cache writes.
+- A stalled sound fetch or decoder has a shared 45-second loading deadline;
+  retries can proceed, and late decoder results cannot replace a later success.
+
+Small interaction corrections: Stop sound suppresses a later finishing bell;
+Reset is available after pausing; update guidance identifies a still-sounding
+tone; footer help links have larger touch targets. Regression tests exercise
+the failures and recovery paths. They remain simulated browser services and do
+not replace physical Android checks.
+
 ## Publication state
 
 Published with explicit user approval at
@@ -54,7 +79,7 @@ Published with explicit user approval at
 The public source repository is
 [Tsunekazu/Harimonium](https://github.com/Tsunekazu/Harimonium).
 
-GitHub reports the Pages build complete for deployment commit
+The first release was verified at deployment commit
 `30de02b6ab43b5be5458d29e507343f7a98cd44b`, derived from app source commit
 `bbf879d`. HTTPS is enforced. All 26 public app/asset URLs returned HTTP 200;
 their bytes matched the local build, including all twelve audio recordings.
