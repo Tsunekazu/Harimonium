@@ -93,6 +93,7 @@ summary::marker { color: var(--brass); font-size: 10px; }
 .toggle[aria-pressed="true"] .indicator { background: var(--brass); border-color: var(--brass); }
 .keyboard-shortcuts { margin: 5px 0 12px; }
 footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 7px 15px; margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+footer a { display: inline-flex; align-items: center; min-height: 44px; }
 footer small { font-size: 10px; }
 footer button { font-size: 12px; padding: 5px 0; }
 noscript { display: block; margin-top: 20px; color: var(--muted); }

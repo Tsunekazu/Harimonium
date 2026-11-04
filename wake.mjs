@@ -18,9 +18,16 @@ export class ScreenAwake {
     if (this.lock || this.pending) return;
     if (!this.navigator.wakeLock) { this.report('This browser cannot keep the screen awake automatically.'); return; }
     this.pending = true;
+    let retryAfterRelease = false;
     try {
       const lock = await this.navigator.wakeLock.request('screen');
-      if (!this.wanted || this.document.hidden) { await lock.release(); return; }
+      if (!this.wanted || this.document.hidden) {
+        await lock.release();
+        // Visibility may have returned while this stale sentinel was releasing.
+        // Its visible refresh saw pending=true, so complete that missed request.
+        retryAfterRelease = this.wanted && !this.document.hidden;
+        return;
+      }
       this.lock = lock; this.report('Screen awake');
       lock.addEventListener('release', () => {
         if (this.lock !== lock) return;
@@ -28,6 +35,9 @@ export class ScreenAwake {
         this.report(this.wanted ? 'The phone released screen-awake mode.' : 'Screen awake is off.');
       });
     } catch { this.report('The phone declined screen-awake mode. Keep HARI visible.'); }
-    finally { this.pending = false; }
+    finally {
+      this.pending = false;
+      if (retryAfterRelease) this.refresh();
+    }
   }
 }
